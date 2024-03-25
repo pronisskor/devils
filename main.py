@@ -2,56 +2,60 @@ __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
-import os
-import openai
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain.chains import RetrievalQA 
 import streamlit as st
-import pandas as pd
-import random
+import tempfile
+import os
 
-# OpenAI API 키 로드
-openai.api_key = os.getenv('OPENAI_API_KEY')
 
-st.title("Chat with Data File via ChatGPT")
+#제목
+st.title("ChatPDF")
 st.write("---")
 
-uploaded_file = st.file_uploader("Choose a file", type=["csv", "xlsx", "xls"])
+#파일 업로드
+uploaded_file = st.file_uploader("PDF 파일을 올려주세요!",type=['pdf'])
 st.write("---")
 
-def load_file(uploaded_file):
-    if uploaded_file is not None:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-        elif uploaded_file.name.endswith('.xlsx') or uploaded_file.name.endswith('.xls'):
-            df = pd.read_excel(uploaded_file)
-        return df
+def pdf_to_document(uploaded_file):
+    temp_dir = tempfile.TemporaryDirectory()
+    temp_filepath = os.path.join(temp_dir.name, uploaded_file.name)
+    with open(temp_filepath, "wb") as f:
+        f.write(uploaded_file.getvalue())
+    loader = PyPDFLoader(temp_filepath)
+    pages = loader.load_and_split()
+    return pages
 
-def generate_sentence_with_word(word):
-    # OpenAI의 ChatGPT API를 사용하여 주어진 단어를 포함한 문장 생성
-    response = openai.Completion.create(
-        engine="gpt-3.5-turbo",  # 수정된 엔진 명칭
-        prompt=f"Create a sentence using the word '{word}':",
-        max_tokens=60,
-        temperature=0.7
-    )
-    return response.choices[0].text.strip()
-
+#업로드 되면 동작하는 코드
 if uploaded_file is not None:
-    if 'words_list' not in st.session_state or 'index' not in st.session_state:
-        st.session_state['words_list'] = []
-        st.session_state['index'] = 0
-    
-    df = load_file(uploaded_file)
-    words_column = 'words'
-    if words_column in df.columns and not st.session_state['words_list']:
-        st.session_state['words_list'] = df[words_column].dropna().tolist()
-        random.shuffle(st.session_state['words_list'])  # 단어 리스트를 랜덤으로 섞음
-    
-    if st.button("다음 단어"):
-        st.session_state['index'] = (st.session_state['index'] + 1) % len(st.session_state['words_list'])
-    
-    if st.session_state['words_list']:
-        word = st.session_state['words_list'][st.session_state['index']]
-        sentence = generate_sentence_with_word(word)
-        st.write(sentence)
-    else:
-        st.write("업로드된 파일에 'words' 열이 포함되어 있지 않습니다.")
+    pages = pdf_to_document(uploaded_file)
+
+    #Split
+    text_splitter = RecursiveCharacterTextSplitter(
+        # Set a really small chunk size, just to show.
+        chunk_size = 300,
+        chunk_overlap  = 20,
+        length_function = len,
+        is_separator_regex = False,
+    )
+    texts = text_splitter.split_documents(pages)
+
+    #Embedding
+    embeddings_model = OpenAIEmbeddings()
+
+    # load it into Chroma
+    db = Chroma.from_documents(texts, embeddings_model)
+
+    #Question
+    st.header("PDF에게 질문해보세요!!")
+    question = st.text_input('질문을 입력하세요')
+
+    if st.button('질문하기'):
+        with st.spinner('Wait for it...'):
+            llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0)
+            qa_chain = RetrievalQA.from_chain_type(llm,retriever=db.as_retriever())
+            result = qa_chain({"query": question})
+            st.write(result["result"])
