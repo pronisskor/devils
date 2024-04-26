@@ -11,10 +11,8 @@ from langchain.chains import RetrievalQA
 import streamlit as st
 import tempfile
 import os
-from streamlit_extras.buy_me_a_coffee import button
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 
-button(username="jocoding", floating=True, width=221)
 
 #제목
 st.title("ChatPDF")
